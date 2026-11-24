@@ -28,3 +28,8 @@ jobs:
           test $? -eq 2 || exit 1
           node cli/tripline.mjs replay samples/access.log --md > incident.md
           grep -q "highest severity critical" incident.md
+      - name: Replay the sample Windows Security log
+        run: |
+          set +e
+          node cli/tripline.mjs replay samples/security.xml --no-color
+          test $? -eq 2

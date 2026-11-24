@@ -2,13 +2,14 @@
 // Tripline command line.
 //   tripline serve   [--port 3000] [--no-block] [--watch /var/log/auth.log]   live lab + dashboard
 //   tripline attack  <scenario> [--port 3000] [--speed 2]                       attack your own lab
-//   tripline replay  <logfile> [--year 2026] [--json | --md]                    analyze a saved log (SSH or web)
+//   tripline replay  <logfile> [--year 2026] [--json | --md]                    analyze a saved log (SSH, web or Windows)
 //   tripline watch   <logfile>                                                  alert on a live log in the terminal
 
 import { readFile, open, stat } from 'node:fs/promises';
 import { watchFile } from 'node:fs';
 import { createDetector, SEVERITY_RANK, fmtSpan } from '../src/engine.js';
-import { parseLine, parseLog } from '../src/parsers.js';
+import { parseLine, parseLog, decodeText } from '../src/parsers.js';
+import { looksLikeFlattenedWinEvent } from '../src/windows.js';
 import { toMarkdown } from '../src/report.js';
 import { createLab } from '../server/lab.mjs';
 import { runScenario, SCENARIOS } from '../server/attacks.mjs';
@@ -82,7 +83,13 @@ async function attack() {
 async function replay() {
   const file = positional[0];
   if (!file) { console.error('Usage: tripline replay <logfile> [--year 2026] [--json]'); process.exit(1); }
-  const events = parseLog(await readFile(file, 'utf8'), { year: Number(opt('year', new Date().getFullYear())) }).sort((a, b) => a.ts - b.ts);
+  const text = decodeText(await readFile(file));
+  const events = parseLog(text, { year: Number(opt('year', new Date().getFullYear())) }).sort((a, b) => a.ts - b.ts);
+  if (!events.length && looksLikeFlattenedWinEvent(text)) {
+    console.error(paint.high('This looks like Get-WinEvent output without its fields. Export it again with:'));
+    console.error("  Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4624,4625,4740} | Select-Object TimeCreated, Id, Properties | ConvertTo-Json -Depth 4 | Out-File security.json");
+    process.exit(1);
+  }
   const det = createDetector({ autoBlock: !flag('no-block') });
   const raised = new Set();
   for (const e of events) for (const a of det.ingest(e).alerts) raised.add(a);
@@ -93,7 +100,7 @@ async function replay() {
     console.log(toMarkdown(det.snapshot(events.at(-1)?.ts || 0), { source: file }));
   } else {
     const span = events.length ? fmtSpan(events.at(-1).ts - events[0].ts) : '0s';
-    const kinds = [['auth', 'login'], ['http', 'web request'], ['conn', 'connection']]
+    const kinds = [['auth', 'login'], ['http', 'web request'], ['conn', 'connection'], ['lockout', 'account lockout']]
       .map(([t, label]) => [events.filter((e) => e.type === t).length, label]).filter(([n]) => n).map(([n, l]) => `${n} ${l}${n === 1 ? '' : 's'}`).join(', ');
     console.log(`${paint.bold(file)}: ${kinds || '0 events'} over ${span}, ${alerts.length} alert(s)\n`);
     alerts.forEach(printAlert);
@@ -139,7 +146,7 @@ function tail(file, onEvent) {
   };
   // Start at the end of the file: only new lines matter in live mode.
   stat(file).then((s) => { pos = s.size; }).catch(() => {}).finally(() => watchFile(file, { interval: 1000 }, pump));
-  console.log(`Watching ${file} for SSH logins...`);
+  console.log(`Watching ${file} for logins...`);
 }
 
 async function watch() {
