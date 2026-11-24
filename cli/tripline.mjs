@@ -2,13 +2,14 @@
 // Tripline command line.
 //   tripline serve   [--port 3000] [--no-block] [--watch /var/log/auth.log]   live lab + dashboard
 //   tripline attack  <scenario> [--port 3000] [--speed 2]                       attack your own lab
-//   tripline replay  <logfile> [--year 2026] [--json]                           analyze a saved log
+//   tripline replay  <logfile> [--year 2026] [--json | --md]                    analyze a saved log (SSH or web)
 //   tripline watch   <logfile>                                                  alert on a live log in the terminal
 
 import { readFile, open, stat } from 'node:fs/promises';
 import { watchFile } from 'node:fs';
 import { createDetector, SEVERITY_RANK, fmtSpan } from '../src/engine.js';
 import { parseLine, parseLog } from '../src/parsers.js';
+import { toMarkdown } from '../src/report.js';
 import { createLab } from '../server/lab.mjs';
 import { runScenario, SCENARIOS } from '../server/attacks.mjs';
 
@@ -88,14 +89,22 @@ async function replay() {
   const alerts = [...raised];
   if (flag('json')) {
     console.log(JSON.stringify({ events: events.length, alerts }, null, 2));
+  } else if (flag('md')) {
+    console.log(toMarkdown(det.snapshot(events.at(-1)?.ts || 0), { source: file }));
   } else {
     const span = events.length ? fmtSpan(events.at(-1).ts - events[0].ts) : '0s';
-    console.log(`${paint.bold(file)}: ${events.length} login events over ${span}, ${alerts.length} alert(s)\n`);
+    const kinds = [['auth', 'login'], ['http', 'web request'], ['conn', 'connection']]
+      .map(([t, label]) => [events.filter((e) => e.type === t).length, label]).filter(([n]) => n).map(([n, l]) => `${n} ${l}${n === 1 ? '' : 's'}`).join(', ');
+    console.log(`${paint.bold(file)}: ${kinds || '0 events'} over ${span}, ${alerts.length} alert(s)\n`);
     alerts.forEach(printAlert);
     const snap = det.snapshot(events.at(-1)?.ts || 0);
-    if (snap.attackers.length) {
-      console.log(`\n${paint.bold('Top sources')}`);
-      for (const a of snap.attackers.slice(0, 8)) console.log(`  ${a.ip.padEnd(16)} ${String(a.failures).padStart(5)} failed  ${String(a.successes).padStart(3)} ok  ${String(a.users).padStart(3)} accounts`);
+    const flagged = snap.attackers.filter((a) => a.alerts > 0);
+    if (flagged.length) {
+      console.log(`\n${paint.bold('Sources that raised alerts')}`);
+      for (const a of flagged.slice(0, 10)) {
+        const web = a.requests ? `  ${String(a.requests).padStart(5)} web requests` : '';
+        console.log(`  ${a.ip.padEnd(16)} ${String(a.failures).padStart(5)} failed  ${String(a.successes).padStart(3)} ok  ${String(a.users).padStart(3)} accounts${web}`);
+      }
     }
   }
   // Exit code 2 when anything high or critical was found, so scripts and cron jobs can react.

@@ -21,3 +21,10 @@ jobs:
           set +e
           node cli/tripline.mjs replay samples/auth.log --year 2026 --no-color
           test $? -eq 2
+      - name: Replay the sample web log and build an incident report
+        run: |
+          set +e
+          node cli/tripline.mjs replay samples/access.log --no-color
+          test $? -eq 2 || exit 1
+          node cli/tripline.mjs replay samples/access.log --md > incident.md
+          grep -q "highest severity critical" incident.md

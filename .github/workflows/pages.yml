@@ -28,7 +28,7 @@ jobs:
         run: |
           mkdir -p _site/src
           cp web/index.html web/app.js web/demo.js web/style.css web/favicon.svg _site/
-          cp src/engine.js src/labdata.js _site/src/
+          cp src/engine.js src/labdata.js src/report.js _site/src/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

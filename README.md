@@ -4,7 +4,7 @@
 
 Tripline is a live attack detection lab. It runs a login page you are allowed to attack, then catches you in real time: brute force, password spraying, distributed attacks, login injection and port scans. Every alert is mapped to MITRE ATT&CK, explained in plain language, and answered automatically by blocking the attacker or locking the account.
 
-You can attack it with its own simulator or with real tools (Hydra, curl, nmap), and you can point the same engine at a real Linux server's SSH log.
+You can attack it with its own simulator or with real tools (Hydra, curl, nmap), and you can point the same engine at a real server's SSH log or nginx / Apache access log. Every investigation can be exported as a Markdown incident report, ready for a ticket.
 
 **[Try the demo in your browser](https://abdulrasheed03.github.io/tripline/)**: guess the admin password and watch yourself get blocked. No install.
 
@@ -22,6 +22,16 @@ You can attack it with its own simulator or with real tools (Hydra, curl, nmap),
 | Login injection | SQL, script, template or NoSQL syntax in the username or password | T1190 | Block the address |
 | Port scan | One address connects to 4 or more decoy ports within 60 s | T1046 | Block the address |
 | Decoy touch | Any connection to a decoy service | T1046 | Note only (low) |
+
+From web server access logs (nginx, Apache):
+
+| Attack | Rule | MITRE ATT&CK | Response |
+|:--|:--|:--|:--|
+| Vulnerability scanner | User-Agent of sqlmap, Nikto, Nuclei, gobuster, ffuf, wpscan and 20 more | T1595.002 | Block the address |
+| Directory brute forcing | 20 requests for missing pages from one address within 60 s | T1595.003 | Block the address |
+| Injection or traversal in a URL | SQL, script, command or path traversal syntax, after URL decoding (twice, to catch double encoding) | T1190 | Block the address |
+| Probe for secrets | Requests for `.env`, `.git/config`, database dumps, `phpinfo.php`, `server-status` and similar | T1083 | Alert |
+| Secret file served | Any of those answered with 2xx | T1552.001 | **Critical.** Its own alert per file, so later probes can never bury it |
 
 Every alert in the dashboard has a "why this matters and what to do" section written for the analyst on shift.
 
@@ -89,6 +99,17 @@ sudo node cli/tripline.mjs serve --watch /var/log/auth.log
 node cli/tripline.mjs replay samples/auth.log
 ```
 
+The same commands read nginx and Apache access logs, and Tripline tells the formats apart on its own:
+
+```bash
+node cli/tripline.mjs replay /var/log/nginx/access.log
+node cli/tripline.mjs replay samples/access.log --md > incident.md   # Markdown incident report
+```
+
+The included [samples/access.log](samples/access.log) has an sqlmap run, a gobuster burst, someone fetching `/.git/config` (and getting it), and a path traversal attempt, mixed with normal visitors whose URLs only *look* dangerous (`/blog/union-select-guide`, `?q=O'Brien`). Tripline flags every attacker and none of the visitors.
+
+The incident report has a summary, the alerts ordered by severity with MITRE links, the analyst guidance for each, the sources and a block list. Text that came from the attacker is always neutralised (no backticks, pipes or newlines, and inside a code span), so a hostile username or URL cannot inject links or fake sections into your ticket. The dashboard has the same report on its **Incident report** button.
+
 `replay` exits with code 2 when it finds anything high or critical, so it can run from cron or CI. The included [samples/auth.log](samples/auth.log) has a root brute force, an invalid-user spray, a low and slow attacker, a weak `deploy` account that gets cracked, and a real admin who mistypes once. Tripline raises exactly one alert per attacker and nothing for the admin.
 
 ```
@@ -147,13 +168,14 @@ These are deliberate trade-offs, and they are worth knowing before trusting any 
 npm test
 ```
 
-27 tests cover each rule at and just below its threshold, false positives (a real admin's typo, passwords like `Kopi2026#` and `O'Brien` that contain SQL characters), the SSH log formats, and end-to-end runs against a live server: blocked mid-attack, cracked with blocking off, scans caught on the decoys, injection never logging in, passwords never leaking, path traversal refused, and the simulator refusing outside targets.
+37 tests cover each rule at and just below its threshold, false positives (a real admin's typo, passwords like `Kopi2026#` and `O'Brien` that contain SQL characters, harmless URLs that look like attacks), the SSH and web log formats, Markdown injection into the incident report, and end-to-end runs against a live server: blocked mid-attack, cracked with blocking off, scans caught on the decoys, injection never logging in, passwords never leaking, path traversal refused, and the simulator refusing outside targets.
 
 ## Project layout
 
 ```
 src/engine.js      Detection rules, alerting, block and lock decisions (pure, no I/O)
-src/parsers.js     OpenSSH auth.log and JSON line parsing
+src/parsers.js     OpenSSH auth.log, nginx / Apache access log and JSON line parsing
+src/report.js      Markdown incident report (pure, shared by CLI and dashboard)
 src/labdata.js     Demo accounts and attack wordlists
 server/lab.mjs     Live server: portal, decoys, event stream, control API
 server/attacks.mjs Attack simulator (loopback only)
@@ -161,13 +183,13 @@ cli/tripline.mjs   serve, attack, replay, watch
 web/               Dashboard, browser demo lab, portal page
 tests/             node --test suites
 samples/auth.log   Example SSH log with four attackers
+samples/access.log Example nginx log with four web attackers and normal visitors
 ```
 
 ## Roadmap
 
 * Export blocks to `nftables`, `ufw` or `fail2ban`
 * Windows Security log support (event IDs 4625 and 4624)
-* Web server access logs: directory brute forcing and scanner fingerprints
 * Persist alerts to a file and replay them into the dashboard
 
 ## Licence

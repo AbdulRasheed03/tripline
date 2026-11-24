@@ -6,9 +6,10 @@
 // Event shapes:
 //   { type: 'auth', ts, ip, user, ok, knownUser?, injection?, source? }
 //   { type: 'conn', ts, ip, port, service? }
+//   { type: 'http', ts, ip, method, path, status, ua? }        (web server access logs)
 // Passwords are never part of an event. Callers only pass the *name* of an injection pattern if one was seen.
 
-export const VERSION = '1.0.0';
+export const VERSION = '1.1.0';
 
 export const DEFAULTS = {
   bruteForce: { failures: 8, windowMs: 60_000 },          // one IP, one account, fast
@@ -17,6 +18,7 @@ export const DEFAULTS = {
   slow: { failures: 20, windowMs: 3_600_000 },             // one IP, under the fast threshold, over an hour
   compromise: { failures: 5, windowMs: 600_000 },          // a success right after many failures
   scan: { ports: 4, windowMs: 60_000 },                    // one IP touching several decoy ports
+  web: { notFound: 20, windowMs: 60_000 },                 // one IP collecting 404s: guessing paths
   autoBlock: true,
   blockMs: 300_000,
   lockMs: 300_000,
@@ -59,6 +61,31 @@ export const RULES = {
     explain: 'One address connected to several decoy ports that no real user has any reason to touch.',
     respond: 'Block the address and expect follow-up attacks on whatever real services it found.',
   },
+  'web-scanner': {
+    title: 'Vulnerability scanner hitting the web server', severity: 'medium', mitre: 'T1595.002', tactic: 'Reconnaissance',
+    explain: 'The User-Agent belongs to an automated attack or scanning tool (for example sqlmap, Nikto or Nuclei). Someone is mapping weaknesses.',
+    respond: 'Block the address and check what the scanner found: look for 200 responses to unusual paths in the same window.',
+  },
+  'web-dir-bruteforce': {
+    title: 'Directory brute forcing', severity: 'medium', mitre: 'T1595.003', tactic: 'Reconnaissance',
+    explain: 'One address is requesting many pages that do not exist. That is a wordlist tool guessing hidden admin panels, backups and APIs.',
+    respond: 'Block the address and review any paths in the burst that returned 200, 301 or 403. Those are the ones it found.',
+  },
+  'web-injection': {
+    title: 'Injection or traversal attempt in a URL', severity: 'high', mitre: 'T1190', tactic: 'Initial Access',
+    explain: 'The request path or query string contains SQL, script, template or path traversal syntax. Someone is trying to break the application.',
+    respond: 'Block the address, then check the application log for the same request. A 200 or 500 response deserves a closer look.',
+  },
+  'web-sensitive-probe': {
+    title: 'Probe for secrets or admin files', severity: 'medium', mitre: 'T1083', tactic: 'Discovery',
+    explain: 'The address asked for files that should never be public, such as .env, .git/config or database dumps. These leak passwords and keys when they exist.',
+    respond: 'Make sure none of the probed files returned 200. If one did, rotate every secret it contained.',
+  },
+  'web-secret-exposed': {
+    title: 'Secret or admin file was served', severity: 'critical', mitre: 'T1552.001', tactic: 'Credential Access',
+    explain: 'A file that should never be public (such as .env or .git/config) was returned with a success status. Anything inside it is now in the attacker\'s hands.',
+    respond: 'Remove the file from the web root now, rotate every password, key and token it contained, and check the logs for other addresses that fetched it.',
+  },
   'honeypot-touch': {
     title: 'Connection to a decoy service', severity: 'low', mitre: 'T1046', tactic: 'Discovery',
     explain: 'Nothing legitimate runs on this port, so any connection is reconnaissance or a mistake.',
@@ -72,15 +99,26 @@ export const SEVERITY_RANK = { info: 0, low: 1, medium: 2, high: 3, critical: 4 
 const INJECTION = [
   // A quote has to close the string first. That keeps ordinary passwords such as "Kopi2026#" out of it.
   [/['"]\s*(or|and)\b\s*['"]?\w*['"]?\s*(=|like\b)\s*['"]?\w*/i, 'SQL tautology'],
-  [/\bunion\b[\s\S]*\bselect\b/i, 'SQL UNION'],
+  // Whitespace or an inline comment between the words, so a slug like /blog/union-select-guide is not flagged.
+  [/\bunion(\s|\/\*.*?\*\/)+(all(\s|\/\*.*?\*\/)+)?select\b/i, 'SQL UNION'],
   [/['"]\s*(--|#|\/\*)/, 'SQL comment terminator'],
   [/;\s*(drop|delete|insert|update|exec|shutdown)\b/i, 'Stacked SQL query'],
   [/\b(sleep|benchmark|pg_sleep|waitfor\s+delay)\s*\(/i, 'Time-based SQL'],
   [/<\s*script|on(error|load|mouseover)\s*=|javascript:/i, 'Script injection'],
   [/\$\{jndi:|\{\{.*\}\}|\$\{.*\}/i, 'Template or JNDI injection'],
   [/\$where|\{\s*"\$(ne|gt|regex)"/i, 'NoSQL operator'],
-  [/(\.\.\/){2,}|\.\.\\/, 'Path traversal'],
+  [/(\.\.\/){2,}|\.\.\\|\/etc\/(passwd|shadow)\b|\bwin\.ini\b/i, 'Path traversal'],
+  [/[;|`]\s*(cat|id|whoami|wget|curl|nc|bash|sh|powershell)\b|\$\((id|whoami|cat)\b/i, 'Command injection'],
 ];
+
+const SCANNER_UA = /\b(sqlmap|nikto|nmap|masscan|nuclei|zgrab|gobuster|dirbuster|dirb|ffuf|feroxbuster|wpscan|acunetix|nessus|openvas|wfuzz|hydra|whatweb|jaeles|xray|commix|arachni|w3af|skipfish|zmeu)\b/i;
+const SENSITIVE_PATH = /(^|\/)(\.env(\.\w+)?|\.git\/(config|HEAD)|\.svn\/|\.aws\/credentials|\.ssh\/|id_rsa|wp-config\.php(\.bak|~|\.old)?|config\.php\.bak|database\.sql|dump\.sql|backup\.(zip|tar\.gz|sql)|\.htpasswd|server-status|phpinfo\.php|phpmyadmin\/?|actuator\/(env|heapdump)|web\.config)$/i;
+
+function decodeSafe(s) {
+  let out = String(s ?? '');
+  for (let i = 0; i < 2; i++) { try { const d = decodeURIComponent(out.replace(/\+/g, ' ')); if (d === out) break; out = d; } catch { break; } }
+  return out;
+}
 
 export function detectInjection(...fields) {
   for (const f of fields) {
@@ -96,6 +134,7 @@ export function createDetector(options = {}) {
   const failsByIp = new Map();   // ip -> [{ ts, user }]
   const failsByUser = new Map(); // user -> [{ ts, ip }]
   const portsByIp = new Map();   // ip -> [{ ts, port }]
+  const missesByIp = new Map();  // ip -> [{ ts, path }]  (404s)
   const blocked = new Map();     // ip -> { until, reason }
   const locked = new Map();      // user -> { until, reason }
   const open = new Map();        // dedupe key -> alert
@@ -179,7 +218,56 @@ export function createDetector(options = {}) {
 
     if (event.type === 'auth') ingestAuth(event, now, out, emit);
     else if (event.type === 'conn') ingestConn(event, now, out, emit);
+    else if (event.type === 'http') ingestHttp(event, now, out, emit);
     return out;
+  }
+
+  function ingestHttp(e, now, out, emit) {
+    const ip = e.ip || 'unknown';
+    const s = touchIp(ip, now);
+    stats.http = (stats.http || 0) + 1;
+    s.requests = (s.requests || 0) + 1;
+    const path = String(e.path || '/').slice(0, 2048);
+    const decoded = decodeSafe(path);
+    const status = Number(e.status) || 0;
+    const shown = `${e.method || 'GET'} ${path.length > 120 ? path.slice(0, 120) + '...' : path} -> ${status}`;
+
+    if (e.ua && SCANNER_UA.test(e.ua)) {
+      const tool = SCANNER_UA.exec(e.ua)[1];
+      emit(raise('web-scanner', ip, now, { ip, count: s.requests, tool, detail: `${ip} is using ${tool} (User-Agent: ${String(e.ua).slice(0, 80)})`, evidence: shown }));
+      block(ip, now, 'web-scanner', out.actions);
+    }
+
+    const injection = detectInjection(decoded);
+    if (injection) {
+      emit(raise('web-injection', ip, now, { ip, count: s.requests, pattern: injection, status, detail: `${injection} in a request from ${ip} (answered ${status})`, evidence: shown }));
+      block(ip, now, 'web-injection', out.actions);
+    }
+
+    const bare = decoded.split(/[?#]/)[0];
+    if (SENSITIVE_PATH.test(bare)) {
+      // A probe is reconnaissance. A probe that got a 2xx answer is a leak, and gets its own critical alert
+      // per file, so a later 404 from the same address can never overwrite it.
+      if (status >= 200 && status < 300) {
+        emit(raise('web-secret-exposed', `${ip}|${bare}`, now, { ip, status, path: bare, count: 1, detail: `${bare} was served to ${ip} (status ${status}). Treat its contents as leaked.`, evidence: shown }));
+      }
+      const probe = raise('web-sensitive-probe', ip, now, { ip, count: s.requests, detail: `${ip} probed for secret or admin files, latest ${bare} (status ${status})`, evidence: shown });
+      probe.alert.paths = [...new Set([...(probe.alert.paths || []), bare])].slice(-12);
+      probe.alert.detail = `${ip} probed ${probe.alert.paths.length} secret or admin file(s): ${probe.alert.paths.join(', ')}`;
+      emit(probe);
+    }
+
+    if (status === 404) {
+      const arr = push(missesByIp, ip, { ts: now, path: bare }, now);
+      const burst = within(arr, now, cfg.web.windowMs);
+      if (burst.length >= cfg.web.notFound) {
+        emit(raise('web-dir-bruteforce', ip, now, {
+          ip, count: burst.length, detail: `${burst.length} requests for missing pages from ${ip} in ${fmtSpan(now - burst[0].ts)}`,
+          evidence: `e.g. ${[...new Set(burst.slice(-5).map((b) => b.path))].join(', ')}`,
+        }));
+        block(ip, now, 'web-dir-bruteforce', out.actions);
+      }
+    }
   }
 
   function ingestAuth(e, now, out, emit) {
@@ -316,7 +404,7 @@ export function createDetector(options = {}) {
   function snapshot(now = lastTs) {
     const attackers = [...ipStats.values()]
       .map((s) => ({
-        ip: s.ip, attempts: s.attempts, failures: s.failures, successes: s.successes, users: s.users.size, ports: s.ports.size,
+        ip: s.ip, attempts: s.attempts, failures: s.failures, successes: s.successes, users: s.users.size, ports: s.ports.size, requests: s.requests || 0,
         alerts: s.alerts, firstSeen: s.firstSeen, lastSeen: s.lastSeen, blockedUntil: isBlocked(s.ip, now)?.until || null,
       }))
       .sort((a, b) => b.alerts - a.alerts || b.attempts - a.attempts)

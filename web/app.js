@@ -3,6 +3,7 @@
 // Everything that came from an attacker (usernames, payloads) is inserted with textContent, never as HTML.
 
 import { SEVERITY_RANK } from './src/engine.js';
+import { toMarkdown } from './src/report.js';
 
 const $ = (s) => document.querySelector(s);
 const SCENARIO_LABELS = {
@@ -213,6 +214,16 @@ function wire() {
   $('#autoblock').addEventListener('change', async (e) => {
     if (lab) lab.setAutoBlock(e.target.checked);
     else await post('/api/config', { autoBlock: e.target.checked });
+  });
+  $('#report').addEventListener('click', async () => {
+    const snap = lab ? lab.snapshot() : await (await fetch('/api/state')).json();
+    const md = toMarkdown(snap, { source: lab ? 'Tripline browser demo' : `Tripline lab on ${location.host}` });
+    const url = URL.createObjectURL(new Blob([md], { type: 'text/markdown' }));
+    const a = el('a', { href: url, download: `tripline-incident-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.md` });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
   $('#reset').addEventListener('click', async () => {
     $('#login-result').textContent = '';
