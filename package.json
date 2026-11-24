@@ -1,0 +1,20 @@
+{
+  "name": "tripline",
+  "version": "1.0.0",
+  "description": "Live attack detection lab. Brute-force the login and watch it catch you: brute force, password spraying, injection and port scans, mapped to MITRE ATT&CK, with auto-blocking.",
+  "type": "module",
+  "bin": {
+    "tripline": "cli/tripline.mjs"
+  },
+  "scripts": {
+    "start": "node cli/tripline.mjs serve",
+    "attack": "node cli/tripline.mjs attack",
+    "replay": "node cli/tripline.mjs replay",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": ["security", "blue-team", "detection-engineering", "brute-force", "password-spraying", "honeypot", "ids", "soc", "mitre-attack", "fail2ban"],
+  "license": "MIT"
+}

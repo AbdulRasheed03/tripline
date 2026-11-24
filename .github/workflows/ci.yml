@@ -1,0 +1,23 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm test
+      - name: Replay the sample SSH log (exit code 2 means it found the attacks)
+        run: |
+          set +e
+          node cli/tripline.mjs replay samples/auth.log --year 2026 --no-color
+          test $? -eq 2

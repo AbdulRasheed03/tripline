@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="light dark">
+  <title>Tripline | Live attack detection lab</title>
+  <meta name="description" content="Try to brute-force a login and watch Tripline catch you in real time. Brute force, password spraying, injection and port scan detection with MITRE ATT&CK mapping.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="masthead">
+    <div class="wrap masthead-in">
+      <a class="brand" href="./"><img src="favicon.svg" alt="" width="26" height="26"><span class="brand-name">Tripline</span></a>
+      <p class="mode" id="mode">Connecting...</p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="intro">
+      <h1>Try to break in.<br>It is watching.</h1>
+      <p class="lead">Guess passwords on the login below, or launch a real attack pattern. Tripline detects brute force, password spraying, distributed attacks, login injection and port scans as they happen, maps each one to MITRE ATT&amp;CK, and blocks the attacker.</p>
+    </section>
+
+    <div class="board">
+      <aside class="controls">
+        <section class="target">
+          <h2 class="label">The target: Acme Staff Portal</h2>
+          <form id="login" class="login" autocomplete="off">
+            <label>Username <input id="user" name="username" spellcheck="false" autocapitalize="off" value="admin"></label>
+            <label>Password <input id="pass" name="password" type="password"></label>
+            <button class="btn primary" type="submit">Sign in</button>
+          </form>
+          <p id="login-result" class="result" role="status" aria-live="polite"></p>
+          <details class="hint">
+            <summary>Hints</summary>
+            <ul>
+              <li>Accounts: <span id="accounts" class="mono">admin, aina, farid, mei, raj, siti</span></li>
+              <li>The admin password is in every top-20 leaked password list.</li>
+              <li>Get it wrong 8 times in a minute and you will be blocked. Turn auto-block off to see what happens when an attacker wins.</li>
+              <li>Try <code class="mono">admin' OR '1'='1' --</code> as the username.</li>
+            </ul>
+          </details>
+        </section>
+
+        <section class="attacks">
+          <h2 class="label">Or launch an attack</h2>
+          <div id="scenarios" class="scenarios"></div>
+          <p id="running" class="note" aria-live="polite"></p>
+          <div class="switches">
+            <label class="switch"><input type="checkbox" id="autoblock" checked> Auto-block attackers</label>
+            <button class="btn small" type="button" id="reset">Reset lab</button>
+          </div>
+        </section>
+
+        <section class="howto" id="howto"></section>
+      </aside>
+
+      <div class="monitor">
+        <section class="counters" aria-label="Totals">
+          <div><span class="n" id="c-attempts">0</span><span class="k">login attempts</span></div>
+          <div><span class="n" id="c-failed">0</span><span class="k">failed</span></div>
+          <div><span class="n" id="c-alerts">0</span><span class="k">alerts</span></div>
+          <div><span class="n" id="c-blocked">0</span><span class="k">turned away</span></div>
+        </section>
+
+        <section class="chart-wrap">
+          <h2 class="label">Attempts per second, last 60 seconds</h2>
+          <div id="chart" class="chart" role="img" aria-label="Attempts per second"></div>
+          <p class="legend"><span class="sw ok"></span>success <span class="sw fail"></span>failed <span class="sw blk"></span>blocked <span class="sw conn"></span>decoy port</p>
+        </section>
+
+        <section>
+          <h2 class="label">Alerts <span class="count" id="alert-count"></span></h2>
+          <ol id="alerts" class="alerts"><li class="empty">Quiet so far. Try a few wrong passwords.</li></ol>
+        </section>
+
+        <div class="split">
+          <section>
+            <h2 class="label">Sources</h2>
+            <div class="table-wrap"><table id="attackers"><thead><tr><th>Address</th><th>Tries</th><th>Failed</th><th>Accounts</th><th>Status</th></tr></thead><tbody></tbody></table></div>
+          </section>
+          <section>
+            <h2 class="label">Live feed</h2>
+            <ol id="feed" class="feed"></ol>
+          </section>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="foot">
+    <div class="wrap">
+      <p class="note">Tripline <span id="ver"></span>. MIT licence. Passwords typed here are checked and thrown away; the engine only ever sees usernames, addresses and the name of any injection pattern it spots.</p>
+    </div>
+  </footer>
+</body>
+</html>
