@@ -7,9 +7,10 @@
 //   { type: 'auth', ts, ip, user, ok, knownUser?, injection?, source? }
 //   { type: 'conn', ts, ip, port, service? }
 //   { type: 'http', ts, ip, method, path, status, ua? }        (web server access logs)
+//   { type: 'lockout', ts, user, host? }                       (Windows event 4740: the OS locked an account)
 // Passwords are never part of an event. Callers only pass the *name* of an injection pattern if one was seen.
 
-export const VERSION = '1.1.0';
+export const VERSION = '1.2.0';
 
 export const DEFAULTS = {
   bruteForce: { failures: 8, windowMs: 60_000 },          // one IP, one account, fast
@@ -85,6 +86,11 @@ export const RULES = {
     title: 'Secret or admin file was served', severity: 'critical', mitre: 'T1552.001', tactic: 'Credential Access',
     explain: 'A file that should never be public (such as .env or .git/config) was returned with a success status. Anything inside it is now in the attacker\'s hands.',
     respond: 'Remove the file from the web root now, rotate every password, key and token it contained, and check the logs for other addresses that fetched it.',
+  },
+  'account-lockout': {
+    title: 'Windows locked an account', severity: 'medium', mitre: 'T1110', tactic: 'Credential Access',
+    explain: 'Windows locked the account after too many wrong passwords (event 4740). One lockout can be a user who forgot a changed password. Several, or one right after a burst of failures, is someone guessing.',
+    respond: 'Check the caller computer and the failed logons (4625) just before it. Unlock only after you know who was guessing, or the attacker gets a fresh set of tries.',
   },
   'honeypot-touch': {
     title: 'Connection to a decoy service', severity: 'low', mitre: 'T1046', tactic: 'Discovery',
@@ -219,6 +225,7 @@ export function createDetector(options = {}) {
     if (event.type === 'auth') ingestAuth(event, now, out, emit);
     else if (event.type === 'conn') ingestConn(event, now, out, emit);
     else if (event.type === 'http') ingestHttp(event, now, out, emit);
+    else if (event.type === 'lockout') ingestLockout(event, now, out, emit);
     return out;
   }
 
@@ -358,6 +365,22 @@ export function createDetector(options = {}) {
       }));
       block(ip, now, 'slow-brute-force', out.actions);
     }
+  }
+
+  // The OS already locked the account, so there is nothing to block here. The value is the context:
+  // the failures Tripline saw for that account just before, and from how many addresses.
+  function ingestLockout(e, now, out, emit) {
+    const user = String(e.user ?? '').slice(0, 128);
+    if (!user) return;
+    stats.lockouts = (stats.lockouts || 0) + 1;
+    const fails = within(failsByUser.get(user), now, cfg.compromise.windowMs);
+    const ips = [...new Set(fails.map((f) => f.ip))];
+    const host = String(e.host || '').slice(0, 64);
+    emit(raise('account-lockout', user, now, {
+      ip: ips.length === 1 ? ips[0] : undefined, user, host, count: fails.length,
+      detail: `Windows locked "${user}"${host ? ` (caller computer ${host})` : ''}${fails.length ? ` after ${fails.length} failed logons from ${ips.length} address${ips.length === 1 ? '' : 'es'}` : ''}`,
+      evidence: ips.length ? `addresses: ${ips.slice(0, 8).join(', ')}${ips.length > 8 ? ', ...' : ''}` : 'event 4740, no failed logons for this account in the log',
+    }));
   }
 
   function ingestConn(e, now, out, emit) {

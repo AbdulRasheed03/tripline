@@ -1,7 +1,10 @@
 // Turns log lines into Tripline events.
 // Supported: OpenSSH lines from /var/log/auth.log or /var/log/secure (classic syslog or ISO timestamps),
 // nginx and Apache access logs (combined or common format),
+// Windows Security events 4624, 4625 and 4740 exported as XML or JSON (see windows.js),
 // and Tripline's own JSON lines ({"type":"auth",...}) for piping from other tools.
+
+import { parseWindowsDocument, parseWindowsXmlEvent, parseWindowsJsonEvent } from './windows.js';
 
 const MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
 
@@ -49,9 +52,12 @@ export function parseLine(line, opts = {}) {
       if ((e.type === 'auth' || e.type === 'conn' || e.type === 'http') && e.ip) {
         return { ...e, ts: typeof e.ts === 'string' ? Date.parse(e.ts) : Number(e.ts) || Date.now(), source: e.source || 'json' };
       }
+      return parseWindowsJsonEvent(e); // one Get-WinEvent object per line (ConvertTo-Json -Compress)
     } catch { /* not JSON after all */ }
     return null;
   }
+
+  if (s.startsWith('<Event')) return parseWindowsXmlEvent(s); // one $_.ToXml() per line
 
   const web = parseAccess(s);
   if (web) return web;
@@ -66,5 +72,15 @@ export function parseLine(line, opts = {}) {
 }
 
 export function parseLog(text, opts = {}) {
-  return String(text).split(/\r?\n/).map((l) => parseLine(l, opts)).filter(Boolean);
+  const win = parseWindowsDocument(text);
+  if (win) return win;
+  return String(text).replace(/^﻿/, '').split(/\r?\n/).map((l) => parseLine(l, opts)).filter(Boolean);
+}
+
+// Bytes from disk to text. Windows PowerShell 5.1 writes UTF-16 with a byte order mark (Out-File, >),
+// which would otherwise read as garbage and silently produce zero events.
+export function decodeText(buf) {
+  if (buf[0] === 0xff && buf[1] === 0xfe) return buf.subarray(2).toString('utf16le');
+  if (buf[0] === 0xfe && buf[1] === 0xff) { const b = Buffer.from(buf.subarray(2)); b.swap16(); return b.toString('utf16le'); }
+  return buf.toString('utf8').replace(/^﻿/, '');
 }

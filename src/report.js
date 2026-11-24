@@ -11,6 +11,8 @@ const safe = (v, max = 160) => {
 };
 const code = (v, max) => '`' + (safe(v, max) || '-') + '`';
 const iso = (ts) => (ts ? new Date(ts).toISOString().replace('.000Z', 'Z') : '-');
+// A Windows lockout names the caller computer, not an address.
+const source = (a) => a.ip || (a.host ? `host ${a.host}` : '');
 const mitreLink = (id) => (id ? `[${id}](https://attack.mitre.org/techniques/${id.replace('.', '/')}/)` : '-');
 
 export function toMarkdown(snapshot, meta = {}) {
@@ -36,6 +38,7 @@ export function toMarkdown(snapshot, meta = {}) {
   if (s.auth || s.blockedAttempts) L.push(`| Login attempts | ${s.auth || 0} (${s.failures || 0} failed, ${s.successes || 0} succeeded, ${s.blockedAttempts || 0} turned away) |`);
   if (s.http) L.push(`| Web requests | ${s.http} |`);
   if (s.conns) L.push(`| Decoy connections | ${s.conns} |`);
+  if (s.lockouts) L.push(`| Windows account lockouts | ${s.lockouts} |`);
   L.push(`| Sources involved | ${new Set(alerts.map((a) => a.ip).filter(Boolean)).size} |`);
   L.push('');
 
@@ -49,12 +52,12 @@ export function toMarkdown(snapshot, meta = {}) {
     L.push('');
     L.push('| # | Severity | Alert | Source | MITRE ATT&CK | First seen |');
     L.push('|:--|:--|:--|:--|:--|:--|');
-    alerts.forEach((a, i) => L.push(`| ${i + 1} | ${a.severity} | ${safe(a.title)} | ${code(a.ip, 45)} | ${mitreLink(a.mitre)} | ${iso(a.firstSeen)} |`));
+    alerts.forEach((a, i) => L.push(`| ${i + 1} | ${a.severity} | ${safe(a.title)} | ${code(source(a), 45)} | ${mitreLink(a.mitre)} | ${iso(a.firstSeen)} |`));
     L.push('');
     alerts.forEach((a, i) => {
       L.push(`### ${i + 1}. ${safe(a.title)} (${a.severity})`);
       L.push('');
-      L.push(`* **Source:** ${code(a.ip, 45)}${a.user ? `, account ${code(a.user, 60)}` : ''}`);
+      L.push(`* **Source:** ${code(source(a), 45)}${a.user ? `, account ${code(a.user, 60)}` : ''}`);
       L.push(`* **Technique:** ${mitreLink(a.mitre)} (${a.tactic})`);
       L.push(`* **Seen:** ${iso(a.firstSeen)} to ${iso(a.lastSeen)}${a.hits > 1 ? `, matched ${a.hits} times` : ''}`);
       L.push(`* **What happened:** ${code(a.detail, 220)}`);

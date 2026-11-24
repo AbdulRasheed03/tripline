@@ -4,7 +4,7 @@
 
 Tripline is a live attack detection lab. It runs a login page you are allowed to attack, then catches you in real time: brute force, password spraying, distributed attacks, login injection and port scans. Every alert is mapped to MITRE ATT&CK, explained in plain language, and answered automatically by blocking the attacker or locking the account.
 
-You can attack it with its own simulator or with real tools (Hydra, curl, nmap), and you can point the same engine at a real server's SSH log or nginx / Apache access log. Every investigation can be exported as a Markdown incident report, ready for a ticket.
+You can attack it with its own simulator or with real tools (Hydra, curl, nmap), and you can point the same engine at a real server's SSH log, nginx / Apache access log, or Windows Security log. Every investigation can be exported as a Markdown incident report, ready for a ticket.
 
 **[Try the demo in your browser](https://abdulrasheed03.github.io/tripline/)**: guess the admin password and watch yourself get blocked. No install.
 
@@ -32,6 +32,12 @@ From web server access logs (nginx, Apache):
 | Injection or traversal in a URL | SQL, script, command or path traversal syntax, after URL decoding (twice, to catch double encoding) | T1190 | Block the address |
 | Probe for secrets | Requests for `.env`, `.git/config`, database dumps, `phpinfo.php`, `server-status` and similar | T1083 | Alert |
 | Secret file served | Any of those answered with 2xx | T1552.001 | **Critical.** Its own alert per file, so later probes can never bury it |
+
+From the Windows Security log (event IDs 4625, 4624 and 4740), every login rule above works on RDP, SMB and console logons, plus:
+
+| Attack | Rule | MITRE ATT&CK | Response |
+|:--|:--|:--|:--|
+| Windows locked an account | Event 4740, with the failed logons Tripline saw for that account just before it | T1110 | Alert (Windows already locked it) |
 
 Every alert in the dashboard has a "why this matters and what to do" section written for the analyst on shift.
 
@@ -125,6 +131,31 @@ samples/auth.log: 82 login events over 1h 07m, 4 alert(s)
        25 failed logins from 203.0.113.200 over 1h 00m, never fast enough to trip the burst rule
 ```
 
+### Windows servers and workstations
+
+Export the Security log from an elevated PowerShell, then replay it. Two formats work:
+
+```powershell
+# XML, one event per line (also works with tripline watch)
+Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4624,4625,4740} -MaxEvents 20000 | ForEach-Object { $_.ToXml() } | Out-File -Encoding utf8 security.xml
+
+# JSON (Select-Object matters: without it every field becomes a type name, and Tripline tells you so)
+Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4624,4625,4740} -MaxEvents 20000 | Select-Object TimeCreated, Id, Properties | ConvertTo-Json -Depth 4 | Out-File security.json
+
+node cli/tripline.mjs replay security.xml
+```
+
+Event Viewer's **Save All Events As... > XML** and `wevtutil qe Security /f:xml` work too, and so do UTF-16 files from Windows PowerShell 5.1.
+
+How the events are read:
+
+* **4625** (failed logon) becomes a failed login from `IpAddress`. SubStatus `0xC0000064` marks an account that does not exist, like "invalid user" in SSH.
+* **4624** (successful logon) becomes a success, so a brute force that ends in a logon raises the critical **Successful login after many failures** alert. Logons Windows makes for itself are dropped first: service, batch and system logon types, `SYSTEM` and the service accounts, machine accounts ending in `$`, `ANONYMOUS LOGON`, and the `DWM-` and `UMFD-` virtual accounts. Without this, a quiet server logs thousands of "successes" an hour.
+* **4740** (account locked out) raises **Windows locked an account**. On a domain this event is written on the domain controller, and it names the caller computer instead of an address.
+* Account names are compared without case, because `Administrator` and `ADMINISTRATOR` are the same account to Windows. `::ffff:203.0.113.5` and `203.0.113.5` count as one source. A console logon has no address and shows as `local`.
+
+The included [samples/security.xml](samples/security.xml) has an RDP brute force on Administrator that ends in a lockout, an SMB password spray, a `backup` account that is guessed and then logs in, a user with one RDP typo, and the usual background noise from Windows itself. Tripline flags the three attackers and nothing else.
+
 ## How it works
 
 ```
@@ -168,13 +199,14 @@ These are deliberate trade-offs, and they are worth knowing before trusting any 
 npm test
 ```
 
-37 tests cover each rule at and just below its threshold, false positives (a real admin's typo, passwords like `Kopi2026#` and `O'Brien` that contain SQL characters, harmless URLs that look like attacks), the SSH and web log formats, Markdown injection into the incident report, and end-to-end runs against a live server: blocked mid-attack, cracked with blocking off, scans caught on the decoys, injection never logging in, passwords never leaking, path traversal refused, and the simulator refusing outside targets.
+45 tests cover each rule at and just below its threshold, false positives (a real admin's typo, passwords like `Kopi2026#` and `O'Brien` that contain SQL characters, harmless URLs that look like attacks), the SSH, web and Windows log formats (XML, JSON from PowerShell 5.1 and 7, UTF-16 files, Windows noise that must not count as logons), Markdown injection into the incident report, and end-to-end runs against a live server: blocked mid-attack, cracked with blocking off, scans caught on the decoys, injection never logging in, passwords never leaking, path traversal refused, and the simulator refusing outside targets.
 
 ## Project layout
 
 ```
 src/engine.js      Detection rules, alerting, block and lock decisions (pure, no I/O)
 src/parsers.js     OpenSSH auth.log, nginx / Apache access log and JSON line parsing
+src/windows.js     Windows Security events 4624, 4625 and 4740 (XML or Get-WinEvent JSON)
 src/report.js      Markdown incident report (pure, shared by CLI and dashboard)
 src/labdata.js     Demo accounts and attack wordlists
 server/lab.mjs     Live server: portal, decoys, event stream, control API
@@ -184,12 +216,13 @@ web/               Dashboard, browser demo lab, portal page
 tests/             node --test suites
 samples/auth.log   Example SSH log with four attackers
 samples/access.log Example nginx log with four web attackers and normal visitors
+samples/security.xml Example Windows Security log with three attackers and Windows noise
 ```
 
 ## Roadmap
 
 * Export blocks to `nftables`, `ufw` or `fail2ban`
-* Windows Security log support (event IDs 4625 and 4624)
+* Windows Kerberos and NTLM events (4771, 4776) for domain controllers
 * Persist alerts to a file and replay them into the dashboard
 
 ## Licence
