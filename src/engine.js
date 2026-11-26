@@ -10,7 +10,7 @@
 //   { type: 'lockout', ts, user, host? }                       (Windows event 4740: the OS locked an account)
 // Passwords are never part of an event. Callers only pass the *name* of an injection pattern if one was seen.
 
-export const VERSION = '1.2.0';
+export const VERSION = '1.3.0';
 
 export const DEFAULTS = {
   bruteForce: { failures: 8, windowMs: 60_000 },          // one IP, one account, fast
@@ -20,6 +20,7 @@ export const DEFAULTS = {
   compromise: { failures: 5, windowMs: 600_000 },          // a success right after many failures
   scan: { ports: 4, windowMs: 60_000 },                    // one IP touching several decoy ports
   web: { notFound: 20, windowMs: 60_000 },                 // one IP collecting 404s: guessing paths
+  webLogin: { posts: 10, windowMs: 60_000 },               // one IP posting to a login page again and again
   autoBlock: true,
   blockMs: 300_000,
   lockMs: 300_000,
@@ -72,6 +73,11 @@ export const RULES = {
     explain: 'One address is requesting many pages that do not exist. That is a wordlist tool guessing hidden admin panels, backups and APIs.',
     respond: 'Block the address and review any paths in the burst that returned 200, 301 or 403. Those are the ones it found.',
   },
+  'web-login-bruteforce': {
+    title: 'Brute force against a web login page', severity: 'high', mitre: 'T1110', tactic: 'Credential Access',
+    explain: 'One address is submitting a login form over and over. A person who forgot their password tries a few times, not ten in a minute. Access logs do not show the username, so this could be one account or many (spraying or credential stuffing).',
+    respond: 'Block the address and check the application log for the accounts it tried. Any 302 or 303 answer in the burst may be a login that worked, so look at that session first.',
+  },
   'web-injection': {
     title: 'Injection or traversal attempt in a URL', severity: 'high', mitre: 'T1190', tactic: 'Initial Access',
     explain: 'The request path or query string contains SQL, script, template or path traversal syntax. Someone is trying to break the application.',
@@ -118,6 +124,9 @@ const INJECTION = [
 ];
 
 const SCANNER_UA = /\b(sqlmap|nikto|nmap|masscan|nuclei|zgrab|gobuster|dirbuster|dirb|ffuf|feroxbuster|wpscan|acunetix|nessus|openvas|wfuzz|hydra|whatweb|jaeles|xray|commix|arachni|w3af|skipfish|zmeu)\b/i;
+// Login endpoints, matched on the whole last path segment so /blog/how-to-login-safely is not one.
+// /oauth/token is left out on purpose: service clients refresh tokens there all day.
+const LOGIN_PATH = /(^|\/)(wp-login\.php|xmlrpc\.php|login|log-in|logon|signin|sign-in|sign_in|auth|authenticate|session|sessions|j_security_check|login\.(php|aspx?|jsp|html?|do|action)|administrator\/index\.php)\/?$/i;
 const SENSITIVE_PATH = /(^|\/)(\.env(\.\w+)?|\.git\/(config|HEAD)|\.svn\/|\.aws\/credentials|\.ssh\/|id_rsa|wp-config\.php(\.bak|~|\.old)?|config\.php\.bak|database\.sql|dump\.sql|backup\.(zip|tar\.gz|sql)|\.htpasswd|server-status|phpinfo\.php|phpmyadmin\/?|actuator\/(env|heapdump)|web\.config)$/i;
 
 function decodeSafe(s) {
@@ -141,6 +150,7 @@ export function createDetector(options = {}) {
   const failsByUser = new Map(); // user -> [{ ts, ip }]
   const portsByIp = new Map();   // ip -> [{ ts, port }]
   const missesByIp = new Map();  // ip -> [{ ts, path }]  (404s)
+  const loginPostsByIp = new Map(); // ip -> [{ ts, path, status }]  (POSTs to login pages)
   const blocked = new Map();     // ip -> { until, reason }
   const locked = new Map();      // user -> { until, reason }
   const open = new Map();        // dedupe key -> alert
@@ -150,7 +160,7 @@ export function createDetector(options = {}) {
   let seq = 0;
   let lastTs = 0;
 
-  const longest = Math.max(cfg.bruteForce.windowMs, cfg.spray.windowMs, cfg.distributed.windowMs, cfg.slow.windowMs, cfg.compromise.windowMs, cfg.scan.windowMs);
+  const longest = Math.max(cfg.bruteForce.windowMs, cfg.spray.windowMs, cfg.distributed.windowMs, cfg.slow.windowMs, cfg.compromise.windowMs, cfg.scan.windowMs, cfg.web.windowMs, cfg.webLogin.windowMs);
 
   function push(map, key, item, now) {
     let arr = map.get(key);
@@ -262,6 +272,28 @@ export function createDetector(options = {}) {
       probe.alert.paths = [...new Set([...(probe.alert.paths || []), bare])].slice(-12);
       probe.alert.detail = `${ip} probed ${probe.alert.paths.length} secret or admin file(s): ${probe.alert.paths.join(', ')}`;
       emit(probe);
+    }
+
+    // Web login brute force. Counted on every status: WordPress answers a wrong password with 200,
+    // other apps with 401, 403, 429 or a redirect back to the form. Ten submissions a minute is not a typo.
+    if (String(e.method || '').toUpperCase() === 'POST' && LOGIN_PATH.test(bare)) {
+      const arr = push(loginPostsByIp, ip, { ts: now, path: bare, status }, now);
+      const burst = within(arr, now, cfg.webLogin.windowMs);
+      if (burst.length >= cfg.webLogin.posts) {
+        const byStatus = new Map();
+        burst.forEach((b) => byStatus.set(b.status, (byStatus.get(b.status) || 0) + 1));
+        const statuses = [...byStatus.entries()].sort((a, b) => b[1] - a[1]).map(([st, n]) => `${st} x${n}`).join(', ');
+        // Some apps redirect every failure back to the form. A redirect only stands out when the other answers were not redirects.
+        const redirects = burst.filter((b) => b.status === 302 || b.status === 303).length;
+        const oddRedirects = redirects > 0 && redirects < burst.length ? redirects : 0;
+        const paths = [...new Set(burst.map((b) => b.path))];
+        emit(raise('web-login-bruteforce', ip, now, {
+          ip, count: burst.length, paths: paths.slice(0, 8),
+          detail: `${burst.length} login submissions to ${paths.slice(0, 3).join(', ')}${paths.length > 3 ? ', ...' : ''} from ${ip} in ${fmtSpan(now - burst[0].ts)}${oddRedirects ? `. ${oddRedirects} answered with a redirect, which may be a login that worked` : ''}`,
+          evidence: `answers: ${statuses}`,
+        }));
+        block(ip, now, 'web-login-bruteforce', out.actions);
+      }
     }
 
     if (status === 404) {

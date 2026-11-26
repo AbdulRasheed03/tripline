@@ -1,6 +1,6 @@
 {
   "name": "tripline",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Live attack detection lab. Brute-force the login and watch it catch you: brute force, password spraying, injection and port scans, mapped to MITRE ATT&CK, with auto-blocking.",
   "type": "module",
   "bin": {

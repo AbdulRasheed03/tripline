@@ -69,7 +69,7 @@ test('a served secret is its own critical alert and is never overwritten by late
 
 test('the sample access.log: every attacker caught, no normal visitor flagged', () => {
   const events = parseLog(readFileSync(new URL('../samples/access.log', import.meta.url), 'utf8'));
-  assert.equal(events.length, 94);
+  assert.equal(events.length, 108);
   const det = createDetector();
   const alerts = rulesOf(det, events);
   const got = alerts.map((a) => `${a.rule} ${a.ip}`).sort();
@@ -77,10 +77,48 @@ test('the sample access.log: every attacker caught, no normal visitor flagged', 
     'web-dir-bruteforce 198.51.100.40',
     'web-injection 203.0.113.120',
     'web-injection 203.0.113.50',
+    'web-login-bruteforce 203.0.113.80',
     'web-scanner 198.51.100.40',
     'web-scanner 203.0.113.50',
     'web-secret-exposed 192.0.2.77',
     'web-sensitive-probe 192.0.2.77',
   ]);
   assert.ok(!alerts.some((a) => /^192\.0\.2\.1\d$/.test(a.ip)), 'normal visitors 192.0.2.10-16 stay quiet');
+});
+
+const post = (ip, path, status, ts) => ({ type: 'http', ts, ip, method: 'POST', path, status, ua: 'Mozilla/5.0' });
+
+test('web login brute force fires at 10 login POSTs in a minute, whatever the status, and blocks', () => {
+  const nine = rulesOf(createDetector(), Array.from({ length: 9 }, (_, i) => post('203.0.113.80', '/wp-login.php', 200, T0 + i * 3000)));
+  assert.deepEqual(nine, []);
+  for (const [path, status] of [['/wp-login.php', 200], ['/login', 401], ['/api/v1/auth', 403], ['/users/sign_in', 422], ['/Account/Login.aspx', 200], ['/j_security_check', 200]]) {
+    const det = createDetector();
+    const a = rulesOf(det, Array.from({ length: 10 }, (_, i) => post('203.0.113.80', path, status, T0 + i * 3000)));
+    assert.deepEqual(a.map((x) => x.rule), ['web-login-bruteforce'], path);
+    assert.equal(a[0].mitre, 'T1110');
+    assert.match(a[0].evidence, new RegExp(`answers: ${status} x10`));
+    assert.ok(det.isBlocked('203.0.113.80', T0 + 30_000), path);
+  }
+});
+
+test('web login brute force works for IPv6, query strings and encoded paths, and points out an odd redirect', () => {
+  const events = Array.from({ length: 11 }, (_, i) => post('2001:db8::66', i % 2 ? '/wp-login.php?redirect_to=%2Fwp-admin' : '/wp%2Dlogin.php', 200, T0 + i * 2000));
+  events.push(post('2001:db8::66', '/wp-login.php', 302, T0 + 23_000));
+  const a = rulesOf(createDetector(), events);
+  assert.equal(a.length, 1);
+  assert.equal(a[0].ip, '2001:db8::66');
+  assert.equal(a[0].count, 12);
+  assert.match(a[0].detail, /1 answered with a redirect, which may be a login that worked/);
+  // An app that redirects every failure back to the form should not get the "may have worked" note.
+  const allRedirects = rulesOf(createDetector(), Array.from({ length: 10 }, (_, i) => post('198.51.100.9', '/login', 302, T0 + i * 1000)));
+  assert.doesNotMatch(allRedirects[0].detail, /may be a login that worked/);
+});
+
+test('web login false-positive guards: page views, other forms, look-alike paths, a slow typist', () => {
+  const quiet = (events, why) => assert.deepEqual(rulesOf(createDetector(), events).map((a) => a.rule), [], why);
+  quiet(Array.from({ length: 30 }, (_, i) => ({ ...post('192.0.2.20', '/login', 200, T0 + i * 1000), method: 'GET' })), 'GET /login is just loading the page');
+  quiet(Array.from({ length: 30 }, (_, i) => post('192.0.2.21', '/api/comments', 201, T0 + i * 1000)), 'other POST forms');
+  quiet(Array.from({ length: 30 }, (_, i) => post('192.0.2.22', ['/blog/how-to-login-safely', '/login-help/faq', '/oauth/token', '/authors'][i % 4], 200, T0 + i * 1000)), 'look-alike paths');
+  quiet(Array.from({ length: 12 }, (_, i) => post('192.0.2.23', '/login', 401, T0 + i * 10_000)), '12 tries spread over two minutes stays under 10 per minute');
+  quiet([post('192.0.2.15', '/wp-login.php', 200, T0), post('192.0.2.15', '/wp-login.php', 302, T0 + 8000)], 'one typo, then in');
 });
