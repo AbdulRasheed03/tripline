@@ -29,6 +29,7 @@ From web server access logs (nginx, Apache):
 |:--|:--|:--|:--|
 | Vulnerability scanner | User-Agent of sqlmap, Nikto, Nuclei, gobuster, ffuf, wpscan and 20 more | T1595.002 | Block the address |
 | Directory brute forcing | 20 requests for missing pages from one address within 60 s | T1595.003 | Block the address |
+| Web login brute force | 10 POSTs to a login page (`wp-login.php`, `xmlrpc.php`, `/login`, `/signin`, `/users/sign_in`, `Login.aspx` and similar) from one address within 60 s, whatever the status. A lone redirect among the failures is called out as a possible successful login | T1110 | Block the address |
 | Injection or traversal in a URL | SQL, script, command or path traversal syntax, after URL decoding (twice, to catch double encoding) | T1190 | Block the address |
 | Probe for secrets | Requests for `.env`, `.git/config`, database dumps, `phpinfo.php`, `server-status` and similar | T1083 | Alert |
 | Secret file served | Any of those answered with 2xx | T1552.001 | **Critical.** Its own alert per file, so later probes can never bury it |
@@ -199,7 +200,7 @@ These are deliberate trade-offs, and they are worth knowing before trusting any 
 npm test
 ```
 
-45 tests cover each rule at and just below its threshold, false positives (a real admin's typo, passwords like `Kopi2026#` and `O'Brien` that contain SQL characters, harmless URLs that look like attacks), the SSH, web and Windows log formats (XML, JSON from PowerShell 5.1 and 7, UTF-16 files, Windows noise that must not count as logons), Markdown injection into the incident report, and end-to-end runs against a live server: blocked mid-attack, cracked with blocking off, scans caught on the decoys, injection never logging in, passwords never leaking, path traversal refused, and the simulator refusing outside targets.
+48 tests cover each rule at and just below its threshold, false positives (a real admin's typo, a web user who mistypes once, page views and blog posts with "login" in the URL, passwords like `Kopi2026#` and `O'Brien` that contain SQL characters, harmless URLs that look like attacks), the SSH, web and Windows log formats (XML, JSON from PowerShell 5.1 and 7, UTF-16 files, Windows noise that must not count as logons), Markdown injection into the incident report, and end-to-end runs against a live server: blocked mid-attack, cracked with blocking off, scans caught on the decoys, injection never logging in, passwords never leaking, path traversal refused, and the simulator refusing outside targets.
 
 ## Project layout
 
@@ -215,7 +216,7 @@ cli/tripline.mjs   serve, attack, replay, watch
 web/               Dashboard, browser demo lab, portal page
 tests/             node --test suites
 samples/auth.log   Example SSH log with four attackers
-samples/access.log Example nginx log with four web attackers and normal visitors
+samples/access.log Example nginx log with five web attackers and normal visitors
 samples/security.xml Example Windows Security log with three attackers and Windows noise
 ```
 

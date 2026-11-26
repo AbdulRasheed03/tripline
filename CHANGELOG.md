@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.0 (2026-11-26)
+
+### Added
+* New rule **Brute force against a web login page** (T1110). One address sending 10 or more POSTs to a login page within 60 seconds raises a high alert and is blocked. It works from nginx and Apache access logs.
+* Login pages covered: `wp-login.php`, `xmlrpc.php`, `/login`, `/signin`, `/sign_in`, `/auth`, `/session(s)`, `j_security_check` and `login.php`, `Login.aspx`, `login.jsp` and similar. The path is URL-decoded first and must end in the login segment, so `/blog/how-to-login-safely` does not count. `/oauth/token` is left out because service clients use it all day.
+* Every status counts, because WordPress answers a wrong password with 200 while other apps use 401, 403, 422 or a redirect. The evidence lists the answers (for example `200 x11, 302 x1`). When a redirect shows up among answers that were not redirects, the alert says it may be a login that worked.
+* `samples/access.log` has a fifth attacker (203.0.113.80) and a normal user who mistypes once and then logs in.
+* 3 tests (48 in total), including IPv6, encoded paths and false-positive guards for page views, other forms, look-alike paths and a slow typist.
+
 ## 1.2.0 (2026-11-24)
 
 ### Added
