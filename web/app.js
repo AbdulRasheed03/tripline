@@ -3,7 +3,7 @@
 // Everything that came from an attacker (usernames, payloads) is inserted with textContent, never as HTML.
 
 import { SEVERITY_RANK } from './src/engine.js';
-import { toMarkdown } from './src/report.js';
+import { toMarkdown, describeEvent } from './src/report.js';
 
 const $ = (s) => document.querySelector(s);
 const SCENARIO_LABELS = {
@@ -50,17 +50,9 @@ function onMessage(kind, data) {
 
 function feed(e) {
   const b = bucket(e.ts || Date.now());
-  let text;
-  let cls = '';
-  if (e.type === 'conn') { b.conn++; text = `${e.ip} touched decoy ${e.service || ''} port ${e.port}`; cls = 'conn'; }
-  else {
-    if (e.blocked) { b.blk++; cls = 'blk'; text = `${e.ip} ${e.user} turned away (blocked)`; }
-    else if (e.locked) { b.blk++; cls = 'blk'; text = `${e.ip} ${e.user} turned away (account locked)`; }
-    else if (e.ok) { b.ok++; cls = 'ok'; text = `${e.ip} ${e.user} LOGIN OK`; }
-    else { b.fail++; cls = 'fail'; text = `${e.ip} ${e.user} failed${e.injection ? ` [${e.injection}]` : ''}`; }
-    if (e.source === 'ssh') text = `ssh ${text}`;
-  }
-  pushFeed(el('li', { class: cls }, el('span', { class: 't', text: time(e.ts || Date.now()) }), ' ', el('span', { text })));
+  const { kind, text } = describeEvent(e);
+  if (kind in b) b[kind]++; // web requests are listed but not counted in the login chart
+  pushFeed(el('li', { class: kind === 'http' ? '' : kind }, el('span', { class: 't', text: time(e.ts || Date.now()) }), ' ', el('span', { text })));
 }
 
 function feedAction(a) {

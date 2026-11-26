@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.1 (2026-11-26)
+
+### Fixed
+* The dashboard live feed showed "undefined ... failed" for a Windows account lockout, and for web requests, when `serve --watch` followed a Windows or web log. Lockouts now read "Windows locked account administrator (caller FS01)", web requests read "203.0.113.9 POST /wp-login.php -> 200", and Windows logons are labelled `windows` like SSH ones are labelled `ssh`.
+* The feed text now comes from `describeEvent` in `src/report.js`, a pure function with its own test (49 in total).
+
 ## 1.3.0 (2026-11-26)
 
 ### Added

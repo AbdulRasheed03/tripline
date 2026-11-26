@@ -132,3 +132,17 @@ test('the incident report names the caller computer for a lockout and neutralise
   assert.ok(!md.includes('`](http'), 'a backtick in the account name cannot close the code span');
   assert.ok(!md.includes('WS|FRONT'), 'a pipe in the caller computer cannot break the table');
 });
+
+test('the live feed describes Windows lockouts and logons, and web requests, without "undefined"', async () => {
+  const { describeEvent } = await import('../src/report.js');
+  const events = parseLog(readFileSync(new URL('../samples/security.xml', import.meta.url), 'utf8'));
+  const lock = describeEvent(events.find((e) => e.type === 'lockout'));
+  assert.deepEqual(lock, { kind: 'blk', text: 'Windows locked account administrator (caller FS01)' });
+  const fail = describeEvent(events.find((e) => e.type === 'auth' && !e.ok));
+  assert.equal(fail.kind, 'fail');
+  assert.match(fail.text, /^windows \S+ \S+ failed$/);
+  const web = describeEvent({ type: 'http', ip: '203.0.113.9', method: 'POST', path: '/wp-login.php', status: 200 });
+  assert.deepEqual(web, { kind: 'http', text: '203.0.113.9 POST /wp-login.php -> 200' });
+  assert.equal(describeEvent({ type: 'auth', ip: '127.0.0.66', user: 'admin', ok: false }).text, '127.0.0.66 admin failed', 'lab logins read as before');
+  for (const e of [...events, { type: 'lockout', ts: 1 }, { type: 'http', ip: 'x' }]) assert.ok(!describeEvent(e).text.includes('undefined'), JSON.stringify(e));
+});
