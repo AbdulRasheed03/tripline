@@ -97,3 +97,21 @@ export function toMarkdown(snapshot, meta = {}) {
   L.push('');
   return L.join('\n');
 }
+
+// One line for the dashboard's live feed. Pure, so it is tested without a browser.
+// Returns the text and a kind: ok, fail, blk (turned away or locked), conn (decoy) or http.
+// The dashboard puts the text in with textContent, so attacker text is never parsed as HTML.
+export function describeEvent(e) {
+  const tag = e.source === 'ssh' || e.source === 'windows' ? `${e.source} ` : '';
+  if (e.type === 'conn') return { kind: 'conn', text: `${e.ip} touched decoy ${e.service || ''} port ${e.port}` };
+  if (e.type === 'lockout') return { kind: 'blk', text: `Windows locked account ${e.user || '?'}${e.host ? ` (caller ${e.host})` : ''}` };
+  if (e.type === 'http') {
+    const path = String(e.path || '/');
+    return { kind: 'http', text: `${e.ip} ${e.method || 'GET'} ${path.length > 80 ? path.slice(0, 80) + '...' : path} -> ${e.status ?? '?'}` };
+  }
+  const user = e.user || '?';
+  if (e.blocked) return { kind: 'blk', text: `${tag}${e.ip} ${user} turned away (blocked)` };
+  if (e.locked) return { kind: 'blk', text: `${tag}${e.ip} ${user} turned away (account locked)` };
+  if (e.ok) return { kind: 'ok', text: `${tag}${e.ip} ${user} LOGIN OK` };
+  return { kind: 'fail', text: `${tag}${e.ip} ${user} failed${e.injection ? ` [${e.injection}]` : ''}` };
+}

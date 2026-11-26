@@ -200,7 +200,7 @@ These are deliberate trade-offs, and they are worth knowing before trusting any 
 npm test
 ```
 
-48 tests cover each rule at and just below its threshold, false positives (a real admin's typo, a web user who mistypes once, page views and blog posts with "login" in the URL, passwords like `Kopi2026#` and `O'Brien` that contain SQL characters, harmless URLs that look like attacks), the SSH, web and Windows log formats (XML, JSON from PowerShell 5.1 and 7, UTF-16 files, Windows noise that must not count as logons), Markdown injection into the incident report, and end-to-end runs against a live server: blocked mid-attack, cracked with blocking off, scans caught on the decoys, injection never logging in, passwords never leaking, path traversal refused, and the simulator refusing outside targets.
+49 tests cover each rule at and just below its threshold, false positives (a real admin's typo, a web user who mistypes once, page views and blog posts with "login" in the URL, passwords like `Kopi2026#` and `O'Brien` that contain SQL characters, harmless URLs that look like attacks), the SSH, web and Windows log formats (XML, JSON from PowerShell 5.1 and 7, UTF-16 files, Windows noise that must not count as logons), Markdown injection into the incident report, the live feed text for every event type, and end-to-end runs against a live server: blocked mid-attack, cracked with blocking off, scans caught on the decoys, injection never logging in, passwords never leaking, path traversal refused, and the simulator refusing outside targets.
 
 ## Project layout
 

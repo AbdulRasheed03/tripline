@@ -10,7 +10,7 @@
 //   { type: 'lockout', ts, user, host? }                       (Windows event 4740: the OS locked an account)
 // Passwords are never part of an event. Callers only pass the *name* of an injection pattern if one was seen.
 
-export const VERSION = '1.3.0';
+export const VERSION = '1.3.1';
 
 export const DEFAULTS = {
   bruteForce: { failures: 8, windowMs: 60_000 },          // one IP, one account, fast
