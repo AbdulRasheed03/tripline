@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.0 (2026-11-27)
+
+### Added
+* Firewall export: `tripline replay <log> --firewall nftables|ufw|fail2ban|iptables` prints commands that block every address the engine decided to block, one per line with the rule as a comment. Tripline only prints them. A person reviews and runs them.
+* `nftables` output lives in its own `tripline` table with IPv4 and IPv6 sets, so one command undoes it. `ufw` uses `prepend`, `fail2ban` uses an existing jail (`--jail`, default `sshd`), and `iptables` writes `ip6tables` lines for IPv6.
+* Addresses must pass a strict IPv4 or IPv6 check before they reach a command, because log text is written by attackers. Values like `203.0.113.7; rm -rf /`, `unknown` or zone ids are skipped and shown as comments. Loopback, `0.0.0.0` and `::` are never blocked. IPv4-mapped IPv6 folds into the plain address, and duplicates are removed.
+* New pure module `src/firewall.js`.
+* 7 tests (56 in total), including command injection through a fake address, a strange jail name, loopback in every spelling, and a guard that the sample's real admin is never blocked.
+
 ## 1.3.1 (2026-11-26)
 
 ### Fixed

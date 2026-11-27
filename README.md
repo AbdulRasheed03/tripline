@@ -132,6 +132,28 @@ samples/auth.log: 82 login events over 1h 07m, 4 alert(s)
        25 failed logins from 203.0.113.200 over 1h 00m, never fast enough to trip the burst rule
 ```
 
+### Turn the blocks into firewall rules
+
+Tripline only refuses logins inside its own lab. To block the same attackers on a real server, ask `replay` for firewall commands. It prints them and never runs them, so you can read the script first:
+
+```bash
+node cli/tripline.mjs replay samples/auth.log --firewall nftables > block.sh   # or ufw, fail2ban, iptables
+```
+
+```
+nft add table inet tripline
+nft add chain inet tripline input '{ type filter hook input priority -10; policy accept; }'
+nft add set inet tripline blocked4 '{ type ipv4_addr; }'
+nft add rule inet tripline input ip saddr @blocked4 drop
+nft add element inet tripline blocked4 '{ 203.0.113.45 }'   # brute-force
+...
+```
+
+* The list is every address the engine decided to block, one line each, with the rule as a comment. The real admin in the sample is not on it.
+* `nftables` puts everything in its own `tripline` table, so `nft delete table inet tripline` undoes it all. `ufw` uses `prepend` so the deny sits above any allow rule. `fail2ban` bans through an existing jail (`--jail sshd` by default). `iptables` writes `ip6tables` lines for IPv6.
+* Log text is written by attackers, so an address must pass a strict IPv4 or IPv6 check before it can appear in a command. A line such as `203.0.113.7; rm -rf /` is skipped and shown as a comment. Loopback and `0.0.0.0` / `::` are skipped too, so the commands can never lock the machine out of itself. IPv4-mapped IPv6 folds into the plain address.
+* Alerts that do not block (secret probes, decoy touches, Windows lockouts, distributed brute force, which locks the account instead) are not in the list. `--no-block` gives an empty list.
+
 ### Windows servers and workstations
 
 Export the Security log from an elevated PowerShell, then replay it. Two formats work:
@@ -192,7 +214,7 @@ These are deliberate trade-offs, and they are worth knowing before trusting any 
 * **Thresholds are guesses.** 8 failures per minute suits a small portal. Tune them in [src/engine.js](src/engine.js) (`DEFAULTS`) for your traffic.
 * **State is in memory.** Restarting the server forgets blocks and history. A production version would persist state and share it across servers.
 * **No geolocation or reputation.** Impossible-travel and known-bad-IP checks need online services, which this lab avoids.
-* **Blocking is application level.** Tripline refuses logins; it does not change the firewall. Exporting blocks to `nftables` or `fail2ban` is on the roadmap.
+* **Blocking is application level.** Tripline refuses logins; it does not change the firewall. `replay --firewall` prints `nftables`, `ufw`, `fail2ban` or `iptables` commands, but a person has to run them, on purpose.
 
 ## Tests
 
@@ -200,7 +222,7 @@ These are deliberate trade-offs, and they are worth knowing before trusting any 
 npm test
 ```
 
-49 tests cover each rule at and just below its threshold, false positives (a real admin's typo, a web user who mistypes once, page views and blog posts with "login" in the URL, passwords like `Kopi2026#` and `O'Brien` that contain SQL characters, harmless URLs that look like attacks), the SSH, web and Windows log formats (XML, JSON from PowerShell 5.1 and 7, UTF-16 files, Windows noise that must not count as logons), Markdown injection into the incident report, the live feed text for every event type, and end-to-end runs against a live server: blocked mid-attack, cracked with blocking off, scans caught on the decoys, injection never logging in, passwords never leaking, path traversal refused, and the simulator refusing outside targets.
+56 tests cover each rule at and just below its threshold, firewall export (every format, IPv6, loopback never blocked, hostile "addresses" that try to smuggle in a shell command), false positives (a real admin's typo, a web user who mistypes once, page views and blog posts with "login" in the URL, passwords like `Kopi2026#` and `O'Brien` that contain SQL characters, harmless URLs that look like attacks), the SSH, web and Windows log formats (XML, JSON from PowerShell 5.1 and 7, UTF-16 files, Windows noise that must not count as logons), Markdown injection into the incident report, the live feed text for every event type, and end-to-end runs against a live server: blocked mid-attack, cracked with blocking off, scans caught on the decoys, injection never logging in, passwords never leaking, path traversal refused, and the simulator refusing outside targets.
 
 ## Project layout
 
@@ -209,6 +231,7 @@ src/engine.js      Detection rules, alerting, block and lock decisions (pure, no
 src/parsers.js     OpenSSH auth.log, nginx / Apache access log and JSON line parsing
 src/windows.js     Windows Security events 4624, 4625 and 4740 (XML or Get-WinEvent JSON)
 src/report.js      Markdown incident report (pure, shared by CLI and dashboard)
+src/firewall.js    Block list to nftables / ufw / fail2ban / iptables commands (pure, prints only)
 src/labdata.js     Demo accounts and attack wordlists
 server/lab.mjs     Live server: portal, decoys, event stream, control API
 server/attacks.mjs Attack simulator (loopback only)
@@ -222,7 +245,6 @@ samples/security.xml Example Windows Security log with three attackers and Windo
 
 ## Roadmap
 
-* Export blocks to `nftables`, `ufw` or `fail2ban`
 * Windows Kerberos and NTLM events (4771, 4776) for domain controllers
 * Persist alerts to a file and replay them into the dashboard
 
