@@ -3,6 +3,7 @@
 //   tripline serve   [--port 3000] [--no-block] [--watch /var/log/auth.log]   live lab + dashboard
 //   tripline attack  <scenario> [--port 3000] [--speed 2]                       attack your own lab
 //   tripline replay  <logfile> [--year 2026] [--json | --md]                    analyze a saved log (SSH, web or Windows)
+//   tripline replay  <logfile> --firewall nftables|ufw|fail2ban|iptables [--jail sshd]   print block commands (never runs them)
 //   tripline watch   <logfile>                                                  alert on a live log in the terminal
 
 import { readFile, open, stat } from 'node:fs/promises';
@@ -11,6 +12,7 @@ import { createDetector, SEVERITY_RANK, fmtSpan } from '../src/engine.js';
 import { parseLine, parseLog, decodeText } from '../src/parsers.js';
 import { looksLikeFlattenedWinEvent } from '../src/windows.js';
 import { toMarkdown } from '../src/report.js';
+import { toFirewall, FIREWALL_FORMATS } from '../src/firewall.js';
 import { createLab } from '../server/lab.mjs';
 import { runScenario, SCENARIOS } from '../server/attacks.mjs';
 
@@ -18,7 +20,7 @@ const argv = process.argv.slice(2);
 const cmd = argv[0] && !argv[0].startsWith('-') ? argv.shift() : 'serve';
 const flag = (name) => argv.includes(`--${name}`);
 const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 && argv[i + 1] ? argv[i + 1] : def; };
-const VALUE_FLAGS = new Set(['port', 'host', 'watch', 'year', 'speed']);
+const VALUE_FLAGS = new Set(['port', 'host', 'watch', 'year', 'speed', 'firewall', 'jail']);
 const positional = [];
 for (let i = 0; i < argv.length; i++) {
   if (argv[i].startsWith('--')) { if (VALUE_FLAGS.has(argv[i].slice(2))) i++; continue; }
@@ -82,7 +84,9 @@ async function attack() {
 
 async function replay() {
   const file = positional[0];
-  if (!file) { console.error('Usage: tripline replay <logfile> [--year 2026] [--json]'); process.exit(1); }
+  if (!file) { console.error('Usage: tripline replay <logfile> [--year 2026] [--json | --md | --firewall nftables|ufw|fail2ban|iptables]'); process.exit(1); }
+  const firewall = opt('firewall');
+  if (flag('firewall') && !FIREWALL_FORMATS.includes(firewall)) { console.error(`--firewall needs one of: ${FIREWALL_FORMATS.join(', ')}`); process.exit(1); }
   const text = decodeText(await readFile(file));
   const events = parseLog(text, { year: Number(opt('year', new Date().getFullYear())) }).sort((a, b) => a.ts - b.ts);
   if (!events.length && looksLikeFlattenedWinEvent(text)) {
@@ -92,9 +96,17 @@ async function replay() {
   }
   const det = createDetector({ autoBlock: !flag('no-block') });
   const raised = new Set();
-  for (const e of events) for (const a of det.ingest(e).alerts) raised.add(a);
+  const blocks = [];
+  for (const e of events) {
+    const r = det.ingest(e);
+    r.alerts.forEach((a) => raised.add(a));
+    blocks.push(...r.actions.filter((a) => a.type === 'block'));
+  }
   const alerts = [...raised];
-  if (flag('json')) {
+  if (firewall) {
+    // Only the commands go to stdout, so the output can be saved as a script and reviewed before anyone runs it.
+    process.stdout.write(toFirewall(blocks, firewall, { source: file, jail: opt('jail') }));
+  } else if (flag('json')) {
     console.log(JSON.stringify({ events: events.length, alerts }, null, 2));
   } else if (flag('md')) {
     console.log(toMarkdown(det.snapshot(events.at(-1)?.ts || 0), { source: file }));
